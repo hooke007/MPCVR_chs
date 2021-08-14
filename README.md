@@ -15,6 +15,10 @@ _可参考 [此处](https://hooke007.github.io/DirectShow+/mpc.html#142-mpc-vide
 **更新** —— 只需替换对应文件即可，无需二次执行 `Install_MPCVR_64.cmd` 。也可选择运行一次 `Reset_Settings.cmd` 恢复初始设置。  
 **卸载** —— （右键管理员）手动运行完毕 `Uninstall_MPCVR_64.cmd` 后删除自定义目录下的文件即可。
 
+## 交流
+
+见右上方网址，如果论坛无法进入可以到 [此处](https://github.com/hooke007/MPV_lazy/discussions) 发帖。
+
 ### MPC-BE
 ==========  
 支持从播放器选项页面直接进入mpcvr的设置页（点击“属性”）；或者从载入文件后右键的滤镜列表中进入  
