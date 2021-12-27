@@ -49,7 +49,7 @@ std::wstring GetVersionStr()
 
 LPCWSTR GetNameAndVersion()
 {
-	static std::wstring version = L"MPCVR_chs 0550.819c7fa.git";
+	static std::wstring version = L"MPCVR_chs 0570.f448e90.git";
 
 	return version.c_str();
 }
