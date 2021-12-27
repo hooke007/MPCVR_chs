@@ -435,6 +435,24 @@ CDX11VideoProcessor::CDX11VideoProcessor(CMpcVideoRenderer* pFilter, const Setti
 	DLogIf(!ret, L"CDX11VideoProcessor::CDX11VideoProcessor() : hook for SetWindowLongA() fail");
 
 	MH_EnableHook(MH_ALL_HOOKS);
+
+	CComPtr<IDXGIAdapter> pDXGIAdapter;
+	for (UINT adapter = 0; m_pDXGIFactory1->EnumAdapters(adapter, &pDXGIAdapter) != DXGI_ERROR_NOT_FOUND; ++adapter) {
+		CComPtr<IDXGIOutput> pDXGIOutput;
+		for (UINT output = 0; pDXGIAdapter->EnumOutputs(output, &pDXGIOutput) != DXGI_ERROR_NOT_FOUND; ++output) {
+			DXGI_OUTPUT_DESC desc{};
+			if (SUCCEEDED(pDXGIOutput->GetDesc(&desc))) {
+				DisplayConfig_t displayConfig = {};
+				if (GetDisplayConfig(desc.DeviceName, displayConfig)) {
+					m_hdrModeStartState[desc.DeviceName] = displayConfig.advancedColor.advancedColorEnabled;
+				}
+			}
+
+			pDXGIOutput.Release();
+		}
+
+		pDXGIAdapter.Release();
+	}
 }
 
 static bool ToggleHDR(const DisplayConfig_t& displayConfig, const BOOL bEnableAdvancedColor)
@@ -563,7 +581,7 @@ HRESULT CDX11VideoProcessor::Init(const HWND hwnd, bool* pChangeDevice/* = nullp
 		&featurelevel,
 		nullptr);
 #ifdef _DEBUG
-	if (hr == DXGI_ERROR_SDK_COMPONENT_MISSING) {
+	if (hr == DXGI_ERROR_SDK_COMPONENT_MISSING || (hr == E_FAIL && !IsWindows8OrGreater())) {
 		DLog(L"WARNING: D3D11 debugging messages will not be displayed");
 		hr = D3D11CreateDevice(
 			pDXGIAdapter,
@@ -1282,10 +1300,16 @@ bool CDX11VideoProcessor::HandleHDRToggle()
 			const auto& ac = displayConfig.advancedColor;
 
 			if (ac.advancedColorSupported && m_iHdrToggleDisplay) {
-				const bool bNeedToggleOn  = !ac.advancedColorEnabled
-					&& (m_iHdrToggleDisplay == HDRTD_Always || m_iHdrToggleDisplay == HDRTD_Fullscreen && m_bIsFullscreen);
-				const bool bNeedToggleOff = ac.advancedColorEnabled
-					&& m_iHdrToggleDisplay == HDRTD_Fullscreen && !m_bIsFullscreen;
+				BOOL bHDREnabled = FALSE;
+				const auto& it = m_hdrModeStartState.find(mi.szDevice);
+				if (it != m_hdrModeStartState.cend()) {
+					bHDREnabled = it->second;
+				}
+
+				const bool bNeedToggleOn  = !ac.advancedColorEnabled &&
+											(m_iHdrToggleDisplay == HDRTD_Always || m_iHdrToggleDisplay == HDRTD_Fullscreen && m_bIsFullscreen);
+				const bool bNeedToggleOff = ac.advancedColorEnabled &&
+											!bHDREnabled && m_iHdrToggleDisplay == HDRTD_Fullscreen && !m_bIsFullscreen;
 				DLog(L"HandleHDRToggle() : %d, %d", bNeedToggleOn, bNeedToggleOff);
 				if (bNeedToggleOn) {
 					bRet = ToggleHDR(displayConfig, TRUE);
@@ -1320,7 +1344,8 @@ bool CDX11VideoProcessor::HandleHDRToggle()
 		if (GetDisplayConfig(mi.szDevice, displayConfig)) {
 			const auto& ac = displayConfig.advancedColor;
 
-			if (ac.advancedColorSupported && ac.advancedColorEnabled) {
+			if (ac.advancedColorSupported && ac.advancedColorEnabled &&
+					(m_iHdrToggleDisplay == HDRTD_Always || m_iHdrToggleDisplay == HDRTD_Fullscreen && m_bIsFullscreen)) {
 				bRet = ToggleHDR(displayConfig, FALSE);
 				DLogIf(!bRet, L"CDX11VideoProcessor::HandleHDRToggle() : Toggle HDR OFF failed");
 
@@ -1375,7 +1400,6 @@ BOOL CDX11VideoProcessor::InitMediaType(const CMediaType* pmt)
 		FmtParams.VP11Format = DXGI_FORMAT_UNKNOWN;
 	}
 
-	const GUID SubType = pmt->subtype;
 	const BITMAPINFOHEADER* pBIH = nullptr;
 	m_decExFmt.value = 0;
 
@@ -1944,11 +1968,14 @@ HRESULT CDX11VideoProcessor::CopySample(IMediaSample* pSample)
 		BYTE* data = nullptr;
 		const long size = pSample->GetActualDataLength();
 		if (size > 0 && S_OK == pSample->GetPointer(&data)) {
-			hr = MemCopyToTexSrcVideo(data, m_srcPitch);
-
-			if (m_D3D11VP.IsReady()) {
-				// ID3D11VideoProcessor does not use textures with D3D11_CPU_ACCESS_WRITE flag
-				m_pDeviceContext->CopyResource(m_D3D11VP.GetNextInputTexture(m_SampleFormat), m_TexSrcVideo.pTexture);
+			if (m_D3D11VP.IsReady() && m_srcPitch > 0 && m_pConvertFn == CopyFrameAsIs) {
+				m_pDeviceContext->UpdateSubresource(m_D3D11VP.GetNextInputTexture(m_SampleFormat), 0, nullptr, data, m_srcPitch, 0);
+			} else {
+				hr = MemCopyToTexSrcVideo(data, m_srcPitch);
+				if (m_D3D11VP.IsReady()) {
+					// ID3D11VideoProcessor does not use textures with D3D11_CPU_ACCESS_WRITE flag
+					m_pDeviceContext->CopyResource(m_D3D11VP.GetNextInputTexture(m_SampleFormat), m_TexSrcVideo.pTexture);
+				}
 			}
 		}
 	}
@@ -3343,7 +3370,6 @@ STDMETHODIMP CDX11VideoProcessor::SetAlphaBitmap(const MFVideoAlphaBitmap *pBmpP
 	CheckPointer(pBmpParms, E_POINTER);
 	CAutoLock cRendererLock(&m_pFilter->m_RendererLock);
 
-	CheckPointer(m_pD3DDevEx, E_ABORT);
 	HRESULT hr = S_FALSE;
 
 	if (pBmpParms->GetBitmapFromDC && pBmpParms->bitmap.hdc) {
@@ -3360,25 +3386,10 @@ STDMETHODIMP CDX11VideoProcessor::SetAlphaBitmap(const MFVideoAlphaBitmap *pBmpP
 			return E_INVALIDARG;
 		}
 
-		hr = m_TexAlphaBitmap.CheckCreate(m_pDevice, DXGI_FORMAT_B8G8R8A8_UNORM, bm.bmWidth, bm.bmHeight, Tex2D_DynamicShaderWrite);
+		hr = m_TexAlphaBitmap.CheckCreate(m_pDevice, DXGI_FORMAT_B8G8R8A8_UNORM, bm.bmWidth, bm.bmHeight, Tex2D_DefaultShader);
+		DLogIf(FAILED(hr), L"CDX11VideoProcessor::SetAlphaBitmap() : CheckCreate() failed with error {}", HR2Str(hr));
 		if (S_OK == hr) {
-			D3D11_MAPPED_SUBRESOURCE mr = {};
-			hr = m_pDeviceContext->Map(m_TexAlphaBitmap.pTexture, 0, D3D11_MAP_WRITE_DISCARD, 0, &mr);
-			if (S_OK == hr) {
-				if (bm.bmWidthBytes == mr.RowPitch) {
-					memcpy(mr.pData, bm.bmBits, bm.bmWidthBytes * bm.bmHeight);
-				} else {
-					LONG linesize = std::min(bm.bmWidthBytes, (LONG)mr.RowPitch);
-					BYTE* src = (BYTE*)bm.bmBits;
-					BYTE* dst = (BYTE*)mr.pData;
-					for (LONG y = 0; y < bm.bmHeight; ++y) {
-						memcpy(dst, src, linesize);
-						src += bm.bmWidthBytes;
-						dst += mr.RowPitch;
-					}
-				}
-				m_pDeviceContext->Unmap(m_TexAlphaBitmap.pTexture, 0);
-			}
+			m_pDeviceContext->UpdateSubresource(m_TexAlphaBitmap.pTexture, 0, nullptr, bm.bmBits, bm.bmWidthBytes, 0);
 		}
 	} else {
 		return E_INVALIDARG;
