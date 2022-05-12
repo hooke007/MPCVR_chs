@@ -180,7 +180,7 @@ HRESULT CVRMainPPage::OnActivate()
 	//SendDlgItemMessageW(IDC_COMBO6, CB_ADDSTRING, 0, (LPARAM)L"Increase by DPI"); // TODO
 
 	ComboBox_AddStringData(m_hWnd, IDC_COMBO1, L"自动8/10位整数",         0);
-	ComboBox_AddStringData(m_hWnd, IDC_COMBO1, L"8/10位整数",             8);
+	ComboBox_AddStringData(m_hWnd, IDC_COMBO1, L"8位整数",                8);
 	ComboBox_AddStringData(m_hWnd, IDC_COMBO1, L"10位整数",              10);
 	ComboBox_AddStringData(m_hWnd, IDC_COMBO1, L"16位浮点",              16);
 
