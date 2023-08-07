@@ -49,7 +49,7 @@ std::wstring GetVersionStr()
 
 LPCWSTR GetNameAndVersion()
 {
-	static std::wstring version = L"MPC Video Renderer " + GetVersionStr();
+	static std::wstring version = L"MPCVR_chs 0690.release";
 
 	return version.c_str();
 }
